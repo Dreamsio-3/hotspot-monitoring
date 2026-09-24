@@ -34,6 +34,15 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/notifications', notificationsRouter);
 
 // Health check
+app.get('/', (_req, res) => {
+  res.json({
+    name: 'yupi-hot-monitor-api',
+    status: 'ok',
+    health: '/api/health',
+    frontend: process.env.CLIENT_URL || 'http://localhost:5173'
+  });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
