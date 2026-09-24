@@ -84,6 +84,27 @@ async function analyzeHotspot(content: string) {
 
 ---
 
+## GitHub REST API 集成
+
+服务端使用 `GET /search/repositories` 搜索近期更新的公开仓库，使用 `GET /repos/{owner}/{repo}` 获取仓库指标，并使用 `GET /repos/{owner}/{repo}/releases` 获取 Release。监控词写成 `repo:owner/repo` 时只采集 Release，草稿会被过滤，预发布版本保留并通过 `releaseIsPrerelease` 标记。
+
+GitHub 结果统一映射为 `source: "github"`，`eventType` 为 `repository` 或 `release`。`starCount`、`forkCount`、`watcherCount` 分别对应 Star、Fork 和 `subscribers_count`；不会把 Star 写入点赞数，也不会使用 `watchers_count` 冒充订阅人数。仓库 `publishedAt`/`pushedAt` 表示最近推送时间，Release 表示发布时间。
+
+请求会发送 `Accept`、API 版本和 User-Agent，服务端可选使用 `GITHUB_TOKEN`。响应中的 ETag 会用于条件请求，限流时最多按 GitHub 返回的等待信息重试一次。
+
+手动搜索：
+
+```json
+POST /api/hotspots/search
+{ "query": "AI agent", "sources": ["github"] }
+```
+
+`sources` 省略时默认包含 `twitter`、`bing`、`github`。
+
+GitHub 热度使用独立的基础分：`20×log10(Star+1) + 15×log10(Fork+1) + 5×log10(订阅+1)`，与社交平台点赞、转发字段分开保存；卡片和“热度综合”排序使用同一公式。
+
+---
+
 ## 2. Twitter API (twitterapi.io) 集成
 
 ### 2.1 认证

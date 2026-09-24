@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
+import { parseRepoReference } from '../services/github.js';
 
 const router = Router();
 
@@ -54,6 +55,10 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Keyword text is required' });
     }
 
+    if (text.trim().startsWith('repo:') && !parseRepoReference(text)) {
+      return res.status(400).json({ error: 'Invalid GitHub repository format. Use repo:owner/name.' });
+    }
+
     const keyword = await prisma.keyword.create({
       data: {
         text: text.trim(),
@@ -75,6 +80,10 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { text, category, isActive } = req.body;
+
+    if (text !== undefined && typeof text === 'string' && text.trim().startsWith('repo:') && !parseRepoReference(text)) {
+      return res.status(400).json({ error: 'Invalid GitHub repository format. Use repo:owner/name.' });
+    }
 
     const keyword = await prisma.keyword.update({
       where: { id: req.params.id },

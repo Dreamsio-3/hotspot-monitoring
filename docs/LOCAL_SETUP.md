@@ -1,4 +1,4 @@
-# 🚀 保姆级本地运行指南
+# 🚀 本地运行指南
 
 本文档手把手教你在本地跑起来 AI 热点监控工具的完整前后端，**零基础也能跟着做**。
 
@@ -19,8 +19,8 @@
 ## 第一步：克隆项目
 
 ```bash
-git clone https://github.com/liyupi/yupi-hot-monitor.git
-cd yupi-hot-monitor
+git clone https://gitee.com/mengli-ruo/hotspot-monitoring.git
+cd hotspot-monitoring
 ```
 
 > 如果 GitHub 访问较慢，可以在 Gitee 上导入仓库后克隆。
@@ -29,7 +29,7 @@ cd yupi-hot-monitor
 
 ## 第二步：获取 API Key
 
-项目需要 **1 个必需的 API Key**，另外 2 个为可选。
+项目需要 **1 个必需的 API Key**，另外 3 个为可选。
 
 ### ✅ 必需：OpenRouter API Key
 
@@ -49,6 +49,10 @@ OpenRouter 是一个统一的 AI 大模型接入平台，注册即可使用。
 1. 打开 [https://twitterapi.io/](https://twitterapi.io/)，注册并登录
 2. 进入 [Dashboard](https://twitterapi.io/dashboard)
 3. 复制你的 API Key
+
+### 🔧 可选：GitHub Token
+
+GitHub 公开仓库可以匿名访问；配置 `GITHUB_TOKEN` 后使用更高的 API 限额。创建 Fine-grained token 时只需公开仓库读取权限（Metadata: read），不需要任何写权限。Token 只在服务端发送，不会返回给前端。
 
 ### 🔧 可选：邮件通知
 
@@ -84,6 +88,10 @@ OPENROUTER_API_KEY=sk-or-v1-你的key粘贴到这里
 
 # 🔧 选填：Twitter API（不填则不抓取 Twitter 数据）
 TWITTER_API_KEY=你的twitter_api_key
+
+# 🔧 选填：GitHub 公共仓库读取 Token（匿名访问限额更低）
+GITHUB_TOKEN=你的github_token
+GITHUB_TIMEOUT_MS=10000
 
 # 🔧 选填：邮件通知（不填则不发送邮件，不影响使用）
 SMTP_HOST=smtp.qq.com
@@ -179,6 +187,21 @@ VITE v7.x.x ready in xxx ms
 
 打开浏览器，访问 **http://localhost:5173** ，你将看到 AI 热点监控工具的界面。
 
+### 使用 Docker Compose
+
+Docker 方式会用线上仓库推送后的代码构建后端和 Nginx 前端，并把 SQLite 数据保存在 `server-data` 卷中。首次运行前可复制 `server/.env.example` 为 `server/.env` 并填写 API Key，然后执行：
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+访问 **http://localhost:5173**，后端健康检查为 **http://localhost:3001/api/health**。停止服务：
+
+```bash
+docker compose down
+```
+
 ### 快速体验流程
 
 1. 在页面的关键词输入框中输入一个关键词，比如 `Claude Opus 5`，点击添加
@@ -186,6 +209,8 @@ VITE v7.x.x ready in xxx ms
 3. 等待几秒到几十秒，热点信息流中会出现 AI 分析后的热点结果
 4. 你可以使用筛选栏按来源、重要性、时间范围过滤结果
 5. 也可以切换排序方式（热度、相关性、时间）
+
+GitHub 监控词支持两种形式：普通词（例如 `AI agent`，搜索近期活跃仓库）和 `repo:owner/repo`（只检查该仓库近期 Release）。仓库卡片中的 Star/Fork 是当前总量，用于辅助排序，不代表当日增长；仓库的时间显示为最近推送时间，Release 显示发布时间。
 
 
 

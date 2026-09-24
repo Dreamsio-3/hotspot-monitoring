@@ -1,4 +1,5 @@
 import { useState } from 'react';
+/* eslint-disable react-refresh/only-export-components */
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowUpDown, Filter, X, Clock, Flame, TrendingUp, Target,
@@ -51,6 +52,7 @@ const SOURCE_OPTIONS = [
   { value: 'weibo', label: '微博热搜' },
   { value: 'hackernews', label: 'HackerNews' },
   { value: 'duckduckgo', label: 'DuckDuckGo' },
+  { value: 'github', label: 'GitHub' },
 ];
 
 const IMPORTANCE_OPTIONS = [

@@ -16,8 +16,8 @@ export const MovingBorder = ({
   className?: string;
   containerClassName?: string;
   borderClassName?: string;
-  as?: any;
-  [key: string]: any;
+  as?: React.ElementType;
+  [key: string]: unknown;
 }) => {
   return (
     <Component

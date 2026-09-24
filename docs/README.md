@@ -1,4 +1,4 @@
-# 🔥 热点监控工具 (Yupi Hot Monitor)
+# 🔥 热点监控工具
 
 > 一款自动发现热点、智能识别真假内容、实时推送通知的 AI 工具
 
@@ -44,12 +44,13 @@
 |------|------|------|
 | 网页搜索 | Bing/Google 爬虫 | 无需 API，控制频率 |
 | Twitter/X | twitterapi.io | 官方 API 接口 |
+| GitHub | GitHub REST API | 近期活跃仓库和指定仓库 Release |
 | 聚合处理 | 多源去重 + AI 分析 | 确保信息质量 |
 
 ## 📁 项目结构
 
 ```
-yupi-hot-monitor/
+hotspot-monitoring/
 ├── docs/                    # 文档目录
 │   ├── README.md           # 项目说明
 │   ├── REQUIREMENTS.md     # 需求文档

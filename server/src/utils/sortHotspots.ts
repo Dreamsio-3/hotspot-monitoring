@@ -11,6 +11,10 @@ export interface SortableHotspot {
   relevance: number;
   publishedAt: Date | string | null;
   createdAt: Date | string;
+  /** GitHub total metrics; they are intentionally separate from social counts. */
+  starCount?: number | null;
+  forkCount?: number | null;
+  watcherCount?: number | null;
 }
 
 /** 重要程度数值映射，数值越小越重要 */
@@ -36,8 +40,11 @@ export function calcHotScore(item: SortableHotspot): number {
   const likes = item.likeCount || 0;
   const retweets = item.retweetCount || 0;
   const views = item.viewCount || 0;
+  const githubScore = Math.log10(Math.max(item.starCount || 0, 0) + 1) * 20
+    + Math.log10(Math.max(item.forkCount || 0, 0) + 1) * 15
+    + Math.log10(Math.max(item.watcherCount || 0, 0) + 1) * 5;
 
-  return likes * 10 + retweets * 5 + Math.log10(Math.max(views, 1)) * 2;
+  return likes * 10 + retweets * 5 + Math.log10(Math.max(views, 1)) * 2 + githubScore;
 }
 
 /**

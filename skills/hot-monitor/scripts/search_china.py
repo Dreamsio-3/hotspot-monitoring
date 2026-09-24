@@ -6,7 +6,7 @@ No API keys required. Outputs JSON array to stdout.
 Usage:
     python search_china.py "AI编程"
     python search_china.py "GPT-5" --sources bilibili,weibo
-    python search_china.py "程序员鱼皮" --detect-account
+    python search_china.py "AI 创作者" --detect-account
 """
 
 import argparse

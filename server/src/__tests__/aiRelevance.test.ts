@@ -56,10 +56,10 @@ Anthropic CEO Dario Amodei 表示，Sonnet 4.6 是他们迄今为止最高效的
     expectedRelevanceRange: [75, 100],
   },
   {
-    name: '直接相关：鱼皮的 AI 导航网站更新',
-    keyword: '鱼皮的 AI 导航',
-    content: `程序员鱼皮的 AI 导航网站上线了全新的分类功能，新增了 50+ AI 工具推荐。
-鱼皮表示，AI 导航将持续更新，帮助开发者快速找到最合适的 AI 工具。
+    name: '直接相关：AI 工具导航网站更新',
+    keyword: 'AI 工具导航',
+    content: `AI 工具导航网站上线了全新的分类功能，新增了 50+ AI 工具推荐。
+该网站将持续更新，帮助开发者快速找到最合适的 AI 工具。
 新版本还支持用户收藏和评分功能。`,
     expectPass: true,
     expectKeywordMentioned: true,
@@ -97,8 +97,8 @@ GPT-5 将支持实时视频理解和复杂数学推导，预计将改变 AI 应�
     expectedRelevanceRange: [20, 55],
   },
   {
-    name: '间接相关：其他 AI 导航网站，不是鱼皮的',
-    keyword: '鱼皮的 AI 导航',
+    name: '间接相关：其他 AI 工具导航网站',
+    keyword: 'AI 工具导航',
     content: `AI 工具导航网站推荐：TopAI 收录了 2000+ 个 AI 工具。
 该导航网站按场景分类，覆盖文本、图像、视频、音频等所有 AI 领域。
 每月活跃用户已超过 50 万。`,
@@ -160,9 +160,9 @@ describe('Query Expansion（查询扩展）', () => {
   });
 
   it('中文关键词能正确扩展', async () => {
-    const result = await expandKeyword('鱼皮的 AI 导航');
-    expect(result).toContain('鱼皮的 AI 导航');
-    expect(result.some(r => r.includes('鱼皮'))).toBe(true);
+    const result = await expandKeyword('AI 工具导航');
+    expect(result).toContain('AI 工具导航');
+    expect(result.some(r => r.includes('工具'))).toBe(true);
   });
 });
 

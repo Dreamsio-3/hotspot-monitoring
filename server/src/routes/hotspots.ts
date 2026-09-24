@@ -1,8 +1,51 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { sortHotspots } from '../utils/sortHotspots.js';
+import type { AIAnalysis, SearchResult } from '../types.js';
 
 const router = Router();
+
+function toSearchHotspot(item: SearchResult, analysis: AIAnalysis | null) {
+  return {
+    id: `${item.source}:${item.sourceId || item.url}`,
+    title: item.title,
+    content: item.content,
+    url: item.url,
+    source: item.source,
+    sourceId: item.sourceId || null,
+    eventType: item.eventType || null,
+    repoFullName: item.repoFullName || null,
+    starCount: item.starCount ?? null,
+    forkCount: item.forkCount ?? null,
+    watcherCount: item.watcherCount ?? null,
+    language: item.language || null,
+    releaseTagName: item.releaseTagName || null,
+    releaseIsPrerelease: item.releaseIsPrerelease ?? null,
+    pushedAt: item.pushedAt?.toISOString() || null,
+    isReal: analysis?.isReal ?? true,
+    relevance: analysis?.relevance ?? 0,
+    relevanceReason: analysis?.relevanceReason || null,
+    keywordMentioned: analysis?.keywordMentioned ?? null,
+    importance: analysis?.importance || 'low',
+    summary: analysis?.summary || null,
+    viewCount: item.viewCount ?? null,
+    likeCount: item.likeCount ?? null,
+    retweetCount: item.retweetCount ?? null,
+    replyCount: item.replyCount ?? null,
+    commentCount: item.commentCount ?? null,
+    quoteCount: item.quoteCount ?? null,
+    danmakuCount: item.danmakuCount ?? null,
+    authorName: item.author?.name || null,
+    authorUsername: item.author?.username || null,
+    authorAvatar: item.author?.avatar || null,
+    authorFollowers: item.author?.followers ?? null,
+    authorVerified: item.author?.verified ?? null,
+    publishedAt: item.publishedAt?.toISOString() || null,
+    createdAt: new Date().toISOString(),
+    keyword: null,
+    analysis
+  };
+}
 
 // 获取所有热点
 router.get('/', async (req, res) => {
@@ -186,7 +229,7 @@ router.get('/:id', async (req, res) => {
 // 手动搜索热点
 router.post('/search', async (req, res) => {
   try {
-    const { query, sources = ['twitter', 'bing'] } = req.body;
+    const { query, sources = ['twitter', 'bing', 'github'] } = req.body;
 
     if (!query) {
       return res.status(400).json({ error: 'Query is required' });
@@ -195,9 +238,16 @@ router.post('/search', async (req, res) => {
     // 导入搜索服务
     const { searchTwitter } = await import('../services/twitter.js');
     const { searchBing } = await import('../services/search.js');
+    const { collectGitHub, parseRepoReference } = await import('../services/github.js');
     const { analyzeContent } = await import('../services/ai.js');
 
+    const repoSyntax = String(query).trim();
+    if (repoSyntax.startsWith('repo:') && !parseRepoReference(repoSyntax)) {
+      return res.status(400).json({ error: 'Invalid GitHub repository format. Use repo:owner/name.' });
+    }
+
     const results: any[] = [];
+    const errors: string[] = [];
 
     // Twitter 搜索
     if (sources.includes('twitter')) {
@@ -206,6 +256,7 @@ router.post('/search', async (req, res) => {
         results.push(...tweets);
       } catch (error) {
         console.error('Twitter search failed:', error);
+        errors.push('Twitter 搜索失败');
       }
     }
 
@@ -216,6 +267,16 @@ router.post('/search', async (req, res) => {
         results.push(...webResults);
       } catch (error) {
         console.error('Bing search failed:', error);
+        errors.push('Bing 搜索失败');
+      }
+    }
+
+    if (sources.includes('github')) {
+      try {
+        results.push(...await collectGitHub(query));
+      } catch (error) {
+        console.error('GitHub search failed:', error);
+        errors.push(error instanceof Error ? `GitHub 搜索失败：${error.message}` : 'GitHub 搜索失败');
       }
     }
 
@@ -223,15 +284,16 @@ router.post('/search', async (req, res) => {
     const analyzedResults = await Promise.all(
       results.slice(0, 10).map(async (item) => {
         try {
-          const analysis = await analyzeContent(item.title + ' ' + item.content, query);
-          return { ...item, analysis };
+          const repo = parseRepoReference(query);
+          const analysis = await analyzeContent(item.title + ' ' + item.content, repo?.fullName || query);
+          return toSearchHotspot(item, analysis);
         } catch {
-          return { ...item, analysis: null };
+          return toSearchHotspot(item, null);
         }
       })
     );
 
-    res.json({ results: analyzedResults });
+    res.json({ results: analyzedResults, errors });
   } catch (error) {
     console.error('Error searching hotspots:', error);
     res.status(500).json({ error: 'Failed to search hotspots' });

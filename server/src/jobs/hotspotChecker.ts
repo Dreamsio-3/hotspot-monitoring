@@ -5,6 +5,7 @@ import { searchBing, searchHackerNews, deduplicateResults } from '../services/se
 import { searchSogou, searchBilibili, searchWeibo, detectAndFetchAccount } from '../services/chinaSearch.js';
 import { analyzeContent, expandKeyword, preMatchKeyword } from '../services/ai.js';
 import { sendHotspotEmail } from '../services/email.js';
+import { collectGitHub, parseRepoReference } from '../services/github.js';
 import type { SearchResult } from '../types.js';
 
 // 新鲜度过滤：丢弃超过指定小时数的内容
@@ -12,10 +13,12 @@ import type { SearchResult } from '../types.js';
 const MAX_AGE_HOURS = 7 * 24; // 7天
 
 function filterByFreshness(results: SearchResult[]): SearchResult[] {
-  const cutoff = new Date(Date.now() - MAX_AGE_HOURS * 3600 * 1000);
   return results.filter(item => {
     // 没有发布时间的，暂时保留（搜索引擎结果通常没有时间）
     if (!item.publishedAt) return true;
+    // 仓库按最近推送时间判断活跃度，搜索接口默认保留 30 天内活动仓库。
+    const maxAgeHours = item.source === 'github' && item.eventType === 'repository' ? 30 * 24 : MAX_AGE_HOURS;
+    const cutoff = new Date(Date.now() - maxAgeHours * 3600 * 1000);
     return item.publishedAt >= cutoff;
   });
 }
@@ -25,12 +28,13 @@ function prioritizeResults(results: SearchResult[]): SearchResult[] {
   const priorityMap: Record<string, number> = {
     twitter: 1,
     weibo: 2,
-    bilibili: 3,
-    hackernews: 4,
-    sogou: 5,
-    bing: 6,
-    google: 7,
-    duckduckgo: 8
+    github: 3,
+    bilibili: 4,
+    hackernews: 5,
+    sogou: 6,
+    bing: 7,
+    google: 8,
+    duckduckgo: 9
   };
   return [...results].sort((a, b) => {
     return (priorityMap[a.source] || 99) - (priorityMap[b.source] || 99);
@@ -80,14 +84,16 @@ export async function runHotspotCheck(io: Server): Promise<void> {
         hackernewsResults,
         sogouResults,
         bilibiliResults,
-        weiboResults
+        weiboResults,
+        githubResults
       ] = await Promise.allSettled([
         searchTwitter(keyword.text),
         searchBing(keyword.text),
         searchHackerNews(keyword.text),
         searchSogou(keyword.text),
         searchBilibili(keyword.text),
-        searchWeibo(keyword.text)
+        searchWeibo(keyword.text),
+        collectGitHub(keyword.text)
       ]);
 
       const allResults: SearchResult[] = [];
@@ -104,7 +110,8 @@ export async function runHotspotCheck(io: Server): Promise<void> {
         { name: 'HackerNews', result: hackernewsResults },
         { name: 'Sogou', result: sogouResults },
         { name: 'Bilibili', result: bilibiliResults },
-        { name: 'Weibo', result: weiboResults }
+        { name: 'Weibo', result: weiboResults },
+        { name: 'GitHub', result: githubResults }
       ];
 
       for (const source of sources) {
@@ -126,14 +133,17 @@ export async function runHotspotCheck(io: Server): Promise<void> {
       // Twitter 最多处理 15 条，其他来源共享 10 条配额
       let twitterProcessed = 0;
       let otherProcessed = 0;
+      let githubProcessed = 0;
       const TWITTER_QUOTA = 15;
       const OTHER_QUOTA = 10;
+      const GITHUB_QUOTA = 10;
 
       for (const item of sortedResults) {
         // 检查配额
         if (item.source === 'twitter' && twitterProcessed >= TWITTER_QUOTA) continue;
-        if (item.source !== 'twitter' && otherProcessed >= OTHER_QUOTA) continue;
-        if (twitterProcessed + otherProcessed >= TWITTER_QUOTA + OTHER_QUOTA) break;
+        if (item.source === 'github' && githubProcessed >= GITHUB_QUOTA) continue;
+        if (item.source !== 'twitter' && item.source !== 'github' && otherProcessed >= OTHER_QUOTA) continue;
+        if (item.source !== 'github' && twitterProcessed + otherProcessed >= TWITTER_QUOTA + OTHER_QUOTA) continue;
         try {
           // 检查是否已存在
           const existing = await prisma.hotspot.findFirst({
@@ -144,13 +154,27 @@ export async function runHotspotCheck(io: Server): Promise<void> {
           });
 
           if (existing) {
+            if (item.source === 'github') {
+              await prisma.hotspot.update({
+                where: { id: existing.id },
+                data: {
+                  starCount: item.starCount ?? existing.starCount,
+                  forkCount: item.forkCount ?? existing.forkCount,
+                  watcherCount: item.watcherCount ?? existing.watcherCount,
+                  language: item.language ?? existing.language,
+                  pushedAt: item.pushedAt ?? existing.pushedAt
+                }
+              });
+            }
             continue;
           }
 
           // AI 分析（传入关键词和预匹配结果）
           const fullText = item.title + '\n' + item.content;
           const preMatch = preMatchKeyword(fullText, expandedKeywords);
-          const analysis = await analyzeContent(fullText, keyword.text, preMatch);
+          const githubRepo = parseRepoReference(keyword.text);
+          const analysisTopic = githubRepo?.fullName || keyword.text;
+          const analysis = await analyzeContent(fullText, analysisTopic, preMatch);
 
           // 只保存真实且相关的热点
           if (!analysis.isReal) {
@@ -178,6 +202,15 @@ export async function runHotspotCheck(io: Server): Promise<void> {
               url: item.url,
               source: item.source,
               sourceId: item.sourceId || null,
+              eventType: item.eventType || null,
+              repoFullName: item.repoFullName || null,
+              starCount: item.starCount ?? null,
+              forkCount: item.forkCount ?? null,
+              watcherCount: item.watcherCount ?? null,
+              language: item.language || null,
+              releaseTagName: item.releaseTagName || null,
+              releaseIsPrerelease: item.releaseIsPrerelease ?? null,
+              pushedAt: item.pushedAt || null,
               isReal: analysis.isReal,
               relevance: analysis.relevance,
               relevanceReason: analysis.relevanceReason || null,
@@ -206,6 +239,7 @@ export async function runHotspotCheck(io: Server): Promise<void> {
 
           newHotspotsCount++;
           if (item.source === 'twitter') twitterProcessed++;
+          else if (item.source === 'github') githubProcessed++;
           else otherProcessed++;
           console.log(`  ✅ New hotspot [${item.source}]: ${hotspot.title.slice(0, 40)}... (${analysis.importance})`);
 

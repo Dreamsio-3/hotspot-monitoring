@@ -27,6 +27,15 @@ model Hotspot {
   url             String
   source          String    // twitter, bing, google
   sourceId        String?   // 原始推文ID等
+  eventType       String?   // github: repository or release
+  repoFullName    String?
+  starCount       Int?
+  forkCount       Int?
+  watcherCount    Int?      // GitHub subscribers_count, not watchers_count
+  language        String?
+  releaseTagName  String?
+  releaseIsPrerelease Boolean?
+  pushedAt        DateTime? // GitHub repository last push time
   isReal          Boolean   @default(true)
   relevance       Int       @default(0)
   relevanceReason String?   // AI 分析相关性的理由

@@ -17,6 +17,15 @@ export interface Hotspot {
   url: string;
   source: string;
   sourceId: string | null;
+  eventType: 'release' | 'repository' | string | null;
+  repoFullName: string | null;
+  starCount: number | null;
+  forkCount: number | null;
+  watcherCount: number | null;
+  language: string | null;
+  releaseTagName: string | null;
+  releaseIsPrerelease: boolean | null;
+  pushedAt: string | null;
   isReal: boolean;
   relevance: number;
   relevanceReason: string | null;
@@ -134,7 +143,7 @@ export const hotspotsApi = {
   getById: (id: string) => request<Hotspot>(`/hotspots/${id}`),
   
   search: (query: string, sources?: string[]) => 
-    request<{ results: Hotspot[] }>('/hotspots/search', {
+    request<{ results: Hotspot[]; errors?: string[] }>('/hotspots/search', {
       method: 'POST',
       body: JSON.stringify({ query, sources })
     }),
@@ -152,7 +161,7 @@ export const notificationsApi = {
         if (value !== undefined) searchParams.append(key, String(value));
       });
     }
-    return request<{ data: Notification[]; unreadCount: number; pagination: any }>(
+    return request<{ data: Notification[]; unreadCount: number; pagination: { page: number; limit: number; total: number; totalPages: number } }>(
       `/notifications?${searchParams}`
     );
   },

@@ -5,7 +5,7 @@ import {
   ExternalLink, RefreshCw, X, Check, AlertTriangle,
   Zap, TrendingUp, Twitter, Globe, Eye, Activity, Clock, Target,
   ChevronLeft, ChevronRight,
-  MessageCircle, Repeat2, Quote, User, Shield, ShieldAlert,
+  MessageCircle, Repeat2, Quote, User, Shield, ShieldAlert, Github,
   ChevronDown, ChevronUp, ChevronsUpDown, ThermometerSun, FileText
 } from 'lucide-react';
 import { 
@@ -30,8 +30,11 @@ function calcHeatScore(h: Hotspot): number {
   const comments = h.commentCount ?? 0;
   const quotes = h.quoteCount ?? 0;
   const views = h.viewCount ?? 0;
+  const githubMetrics = Math.log10((h.starCount ?? 0) + 1) * 20
+    + Math.log10((h.forkCount ?? 0) + 1) * 15
+    + Math.log10((h.watcherCount ?? 0) + 1) * 5;
   // 加权公式：转发最重、其次点赞、然后评论/回复
-  const raw = likes * 2 + retweets * 3 + replies * 1.5 + comments * 1.5 + quotes * 2 + views / 100;
+  const raw = likes * 2 + retweets * 3 + replies * 1.5 + comments * 1.5 + quotes * 2 + views / 100 + githubMetrics;
   // log 压缩到 0-100
   if (raw <= 0) return 0;
   return Math.min(100, Math.round(Math.log10(raw + 1) * 25));
@@ -45,6 +48,24 @@ function getHeatLevel(score: number): { label: string; color: string } {
   return { label: '冷', color: 'text-slate-500' };
 }
 
+function GitHubDetails({ hotspot }: { hotspot: Hotspot }) {
+  if (hotspot.source !== 'github') return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 mb-3 text-[11px] text-slate-500">
+      <span className="px-2 py-0.5 rounded-md bg-slate-500/10 border border-slate-500/20 text-slate-300">
+        {hotspot.eventType === 'release' ? 'Release' : 'Repository'}
+      </span>
+      {hotspot.releaseTagName && <span className="text-blue-300">{hotspot.releaseTagName}</span>}
+      {hotspot.releaseIsPrerelease && <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">预发布</span>}
+      {hotspot.repoFullName && <span className="text-slate-400">{hotspot.repoFullName}</span>}
+      {hotspot.starCount != null && <span>★ {hotspot.starCount.toLocaleString()}</span>}
+      {hotspot.forkCount != null && <span>⑂ {hotspot.forkCount.toLocaleString()}</span>}
+      {hotspot.watcherCount != null && <span>订阅 {hotspot.watcherCount.toLocaleString()}</span>}
+      {hotspot.language && <span>{hotspot.language}</span>}
+    </div>
+  );
+}
+
 function App() {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
@@ -54,6 +75,7 @@ function App() {
   
   const [newKeyword, setNewKeyword] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchSources, setSearchSources] = useState<string[]>(['twitter', 'bing', 'github']);
   const [isLoading, setIsLoading] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -73,22 +95,21 @@ function App() {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const filterParams: Record<string, string | number> = {
+      const filterParams = {
         limit: 20,
         page: currentPage,
+        source: dashboardFilters.source || undefined,
+        importance: dashboardFilters.importance || undefined,
+        keywordId: dashboardFilters.keywordId || undefined,
+        timeRange: dashboardFilters.timeRange || undefined,
+        isReal: dashboardFilters.isReal || undefined,
+        sortBy: dashboardFilters.sortBy || undefined,
+        sortOrder: dashboardFilters.sortOrder || undefined,
       };
-      // Apply dashboard filters
-      if (dashboardFilters.source) filterParams.source = dashboardFilters.source;
-      if (dashboardFilters.importance) filterParams.importance = dashboardFilters.importance;
-      if (dashboardFilters.keywordId) filterParams.keywordId = dashboardFilters.keywordId;
-      if (dashboardFilters.timeRange) filterParams.timeRange = dashboardFilters.timeRange;
-      if (dashboardFilters.isReal) filterParams.isReal = dashboardFilters.isReal;
-      if (dashboardFilters.sortBy) filterParams.sortBy = dashboardFilters.sortBy;
-      if (dashboardFilters.sortOrder) filterParams.sortOrder = dashboardFilters.sortOrder;
 
       const [keywordsData, hotspotsData, statsData, notifData] = await Promise.all([
         keywordsApi.getAll(),
-        hotspotsApi.getAll(filterParams as any),
+        hotspotsApi.getAll(filterParams),
         hotspotsApi.getStats(),
         notificationsApi.getAll({ limit: 20 })
       ]);
@@ -154,8 +175,8 @@ function App() {
       setNewKeyword('');
       showToast('关键词添加成功', 'success');
       subscribeToKeywords([keyword.text]);
-    } catch (error: any) {
-      showToast(error.message || '添加失败', 'error');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : '添加失败', 'error');
     }
   };
 
@@ -165,7 +186,7 @@ function App() {
       await keywordsApi.delete(id);
       setKeywords(prev => prev.filter(k => k.id !== id));
       showToast('关键词已删除', 'success');
-    } catch (error) {
+    } catch {
       showToast('删除失败', 'error');
     }
   };
@@ -175,7 +196,7 @@ function App() {
     try {
       const updated = await keywordsApi.toggle(id);
       setKeywords(prev => prev.map(k => k.id === id ? updated : k));
-    } catch (error) {
+    } catch {
       showToast('操作失败', 'error');
     }
   };
@@ -187,10 +208,10 @@ function App() {
 
     setIsLoading(true);
     try {
-      const result = await hotspotsApi.search(searchQuery);
+      const result = await hotspotsApi.search(searchQuery, searchSources);
       setSearchResults(result.results);
-      showToast(`找到 ${result.results.length} 条结果`, 'success');
-    } catch (error) {
+      showToast(result.errors?.length ? `${result.errors.join('；')}，找到 ${result.results.length} 条结果` : `找到 ${result.results.length} 条结果`, result.errors?.length && result.results.length === 0 ? 'error' : 'success');
+    } catch {
       showToast('搜索失败', 'error');
     } finally {
       setIsLoading(false);
@@ -204,7 +225,7 @@ function App() {
       await triggerHotspotCheck();
       showToast('热点检查已触发', 'success');
       setTimeout(loadData, 5000);
-    } catch (error) {
+    } catch {
       showToast('触发失败', 'error');
     } finally {
       setIsChecking(false);
@@ -305,6 +326,7 @@ function App() {
       case 'weibo': return <Activity className="w-4 h-4" />;
       case 'sogou': return <Search className="w-4 h-4" />;
       case 'hackernews': return <Zap className="w-4 h-4" />;
+      case 'github': return <Github className="w-4 h-4" />;
       default: return <Globe className="w-4 h-4" />;
     }
   };
@@ -318,7 +340,8 @@ function App() {
       bilibili: 'Bilibili',
       weibo: '微博热搜',
       hackernews: 'HackerNews',
-      duckduckgo: 'DuckDuckGo'
+      duckduckgo: 'DuckDuckGo',
+      github: 'GitHub'
     };
     return labels[source] || source;
   };
@@ -654,6 +677,7 @@ function App() {
                           <h3 className="font-medium text-white mb-2 line-clamp-2 group-hover:text-blue-400 transition-colors">
                             {hotspot.title}
                           </h3>
+                          <GitHubDetails hotspot={hotspot} />
                           
                           {/* AI Summary - 标注 */}
                           {hotspot.summary && (
@@ -736,9 +760,9 @@ function App() {
                           {/* 时间信息 */}
                           <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
                             {hotspot.publishedAt && (
-                              <span className="flex items-center gap-1" title={`发布于 ${formatDateTime(hotspot.publishedAt)}`}>
+                              <span className="flex items-center gap-1" title={`${hotspot.source === 'github' && hotspot.eventType === 'repository' ? '最近推送于' : '发布于'} ${formatDateTime(hotspot.publishedAt)}`}>
                                 <Clock className="w-3 h-3" />
-                                发布 {relativeTime(hotspot.publishedAt)}
+                                {hotspot.source === 'github' && hotspot.eventType === 'repository' ? '最近推送' : '发布'} {relativeTime(hotspot.publishedAt)}
                               </span>
                             )}
                             <span className="flex items-center gap-1" title={`抓取于 ${formatDateTime(hotspot.createdAt)}`}>
@@ -983,7 +1007,7 @@ function App() {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="搜索热点内容..."
+                    placeholder="搜索热点内容（支持 repo:owner/repo 监控 Release）..."
                     className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all"
                   />
                 </div>
@@ -1001,6 +1025,19 @@ function App() {
                   )}
                   搜索
                 </motion.button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 mt-3 text-xs text-slate-500">
+                <span>搜索来源：</span>
+                {['twitter', 'bing', 'github'].map(source => (
+                  <button
+                    type="button"
+                    key={source}
+                    onClick={() => setSearchSources(prev => prev.includes(source) ? prev.filter(item => item !== source) : [...prev, source])}
+                    className={cn('px-2.5 py-1 rounded-lg border transition-colors', searchSources.includes(source) ? 'text-blue-400 border-blue-500/30 bg-blue-500/10' : 'border-white/10 hover:border-white/20')}
+                  >
+                    {source === 'github' ? 'GitHub' : source === 'twitter' ? 'Twitter' : 'Bing'}
+                  </button>
+                ))}
               </div>
             </form>
 
@@ -1059,6 +1096,7 @@ function App() {
                         </span>
                       </div>
                       <h3 className="font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">{hotspot.title}</h3>
+                      <GitHubDetails hotspot={hotspot} />
                       {hotspot.summary && (
                         <div className="mb-2">
                           <span className="text-[10px] text-blue-400/60 font-medium mr-1.5">AI 摘要</span>
@@ -1095,7 +1133,7 @@ function App() {
                       {hotspot.publishedAt && (
                         <div className="flex items-center gap-1 text-[11px] text-slate-600 mt-1" title={formatDateTime(hotspot.publishedAt)}>
                           <Clock className="w-3 h-3" />
-                          发布 {relativeTime(hotspot.publishedAt)}
+                          {hotspot.source === 'github' && hotspot.eventType === 'repository' ? '最近推送' : '发布'} {relativeTime(hotspot.publishedAt)}
                         </div>
                       )}
                     </div>
