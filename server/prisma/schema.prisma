@@ -1,0 +1,70 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Keyword {
+  id        String    @id @default(uuid())
+  text      String    @unique
+  category  String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  hotspots  Hotspot[]
+}
+
+model Hotspot {
+  id              String    @id @default(uuid())
+  title           String
+  content         String
+  url             String
+  source          String    // twitter, bing, google
+  sourceId        String?   // 原始推文ID等
+  isReal          Boolean   @default(true)
+  relevance       Int       @default(0)
+  relevanceReason String?   // AI 分析相关性的理由
+  keywordMentioned Boolean?  // 内容中是否直接提及了关键词
+  importance      String    @default("low")
+  summary         String?
+  viewCount       Int?
+  likeCount       Int?
+  retweetCount    Int?
+  replyCount      Int?      // 回复数
+  commentCount    Int?      // 评论数
+  quoteCount      Int?      // 引用/转引数
+  danmakuCount    Int?      // 弹幕数 (Bilibili)
+  authorName      String?   // 作者名称
+  authorUsername  String?   // 作者用户名
+  authorAvatar    String?   // 作者头像
+  authorFollowers Int?      // 作者粉丝数
+  authorVerified  Boolean?  // 作者是否认证
+  publishedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  keywordId       String?
+  keyword         Keyword?  @relation(fields: [keywordId], references: [id], onDelete: SetNull)
+
+  @@unique([url, source])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  type      String   // hotspot, alert
+  title     String
+  content   String
+  isRead    Boolean  @default(false)
+  hotspotId String?
+  createdAt DateTime @default(now())
+}
+
+model Setting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+}
