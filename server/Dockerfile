@@ -1,6 +1,7 @@
-FROM node:20-bookworm-slim AS build
+FROM alpine:3.20 AS build
 
 WORKDIR /app
+RUN apk add --no-cache nodejs npm
 COPY package*.json ./
 RUN npm ci
 
@@ -11,9 +12,10 @@ RUN DATABASE_URL=file:/tmp/dev.db npx prisma generate
 COPY src ./src
 RUN npm run build
 
-FROM node:20-bookworm-slim
+FROM alpine:3.20
 
 WORKDIR /app
+RUN apk add --no-cache nodejs npm
 ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev

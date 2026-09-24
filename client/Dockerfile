@@ -1,12 +1,15 @@
-FROM node:20-bookworm-slim AS build
+FROM alpine:3.20 AS build
 
 WORKDIR /app
+RUN apk add --no-cache nodejs npm
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+FROM alpine:3.20
+RUN apk add --no-cache nginx
+COPY nginx.conf /etc/nginx/http.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
