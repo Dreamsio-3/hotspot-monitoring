@@ -22,6 +22,7 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/prisma.config.ts ./
+RUN DATABASE_URL=file:/app/data/dev.db npx prisma generate
 
 RUN mkdir -p /app/data
 
