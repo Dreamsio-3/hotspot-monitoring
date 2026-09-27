@@ -24,7 +24,7 @@ export const defaultFilterState: FilterState = {
   keywordId: '',
   timeRange: '',
   isReal: '',
-  sortBy: 'createdAt',
+  sortBy: 'hot',
   sortOrder: 'desc',
 };
 
@@ -35,11 +35,11 @@ interface FilterSortBarProps {
 }
 
 const SORT_OPTIONS = [
+  { value: 'hot', label: '热度综合', icon: TrendingUp },
   { value: 'createdAt', label: '最新发现', icon: Clock },
   { value: 'publishedAt', label: '最新发布', icon: Clock },
   { value: 'importance', label: '重要程度', icon: Flame },
   { value: 'relevance', label: '相关性', icon: Target },
-  { value: 'hot', label: '热度综合', icon: TrendingUp },
 ];
 
 const SOURCE_OPTIONS = [
@@ -153,7 +153,7 @@ export default function FilterSortBar({ filters, onChange, keywords }: FilterSor
     filters.isReal,
   ].filter(v => v !== '').length;
 
-  const hasNonDefaultSort = filters.sortBy !== 'createdAt';
+  const hasNonDefaultSort = filters.sortBy !== defaultFilterState.sortBy;
 
   const update = (key: keyof FilterState, value: string) => {
     onChange({ ...filters, [key]: value });
