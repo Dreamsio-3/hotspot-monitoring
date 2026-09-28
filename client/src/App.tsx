@@ -1,26 +1,25 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Flame, Search, Plus, Bell, Trash2, 
+import {
+  Flame, Plus, Bell, Trash2,
   ExternalLink, RefreshCw, X, Check, AlertTriangle,
   Zap, TrendingUp, Twitter, Globe, Eye, Activity, Clock, Target,
   ChevronLeft, ChevronRight,
   MessageCircle, Repeat2, Quote, User, Shield, ShieldAlert, Github,
-  ChevronDown, ChevronUp, ChevronsUpDown, ThermometerSun, FileText
+  ChevronDown, ChevronUp, ChevronsUpDown, ThermometerSun, FileText,
+  Settings, Search
 } from 'lucide-react';
-import { 
-  keywordsApi, hotspotsApi, notificationsApi, triggerHotspotCheck,
-  type Keyword, type Hotspot, type Stats, type Notification
+import {
+  keywordsApi, hotspotsApi, notificationsApi, schedulerApi,
+  type Keyword, type Hotspot, type Stats, type Notification, type SchedulerStatus
 } from './services/api';
-import { onNewHotspot, onNotification, subscribeToKeywords } from './services/socket';
+import { onNewHotspot, onNotification, onScanComplete, subscribeToKeywords } from './services/socket';
 import { cn } from './lib/utils';
 import { Spotlight } from './components/ui/spotlight';
 import { BackgroundBeams } from './components/ui/background-beams';
 import { Meteors } from './components/ui/meteors';
 import FilterSortBar, { defaultFilterState, type FilterState } from './components/FilterSortBar';
-import { sortHotspots } from './utils/sortHotspots';
 import { relativeTime, formatDateTime } from './utils/relativeTime';
-// TextGenerateEffect available for future use
 
 /** 计算热度综合指标（归一化 0-100） */
 function calcHeatScore(h: Hotspot): number {
@@ -66,6 +65,180 @@ function GitHubDetails({ hotspot }: { hotspot: Hotspot }) {
   );
 }
 
+const INTERVAL_OPTIONS = [5, 10, 15, 30, 60];
+
+function SchedulerPanel({ status, onRefresh, onToggle, onIntervalChange, onTrigger, isChecking }: {
+  status: SchedulerStatus | null;
+  onRefresh: () => void;
+  onToggle: (enabled: boolean) => void;
+  onIntervalChange: (minutes: number) => void;
+  onTrigger: () => void;
+  isChecking: boolean;
+}) {
+  useEffect(() => { onRefresh(); }, []);
+
+  if (!status) {
+    return (
+      <div className="text-center py-16">
+        <div className="w-8 h-8 mx-auto border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+        <p className="text-slate-500 mt-4">加载调度器状态...</p>
+      </div>
+    );
+  }
+
+  const statusColor = status.lastRunStatus === 'success' ? 'text-emerald-400'
+    : status.lastRunStatus === 'partial' ? 'text-amber-400'
+    : status.lastRunStatus === 'failed' ? 'text-red-400'
+    : 'text-slate-500';
+
+  const statusLabel: Record<string, string> = {
+    success: '成功', partial: '部分成功', failed: '失败', empty: '空运行'
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* 启停和间隔 */}
+      <div className="p-5 rounded-2xl bg-white/[0.02] border border-white/5">
+        <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+          <Settings className="w-5 h-5 text-blue-400" />
+          调度器配置
+        </h3>
+        <div className="flex flex-wrap items-center gap-6">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-slate-400">定时扫描</span>
+            <button
+              onClick={() => onToggle(!status.enabled)}
+              className={cn(
+                "w-11 h-6 rounded-full transition-all relative",
+                status.enabled ? "bg-blue-500" : "bg-slate-700"
+              )}
+            >
+              <span className={cn(
+                "absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all",
+                status.enabled ? "left-6" : "left-1"
+              )} />
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-slate-400">扫描间隔</span>
+            <select
+              value={status.intervalMinutes}
+              onChange={(e) => onIntervalChange(Number(e.target.value))}
+              className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-blue-500/50"
+            >
+              {INTERVAL_OPTIONS.map(m => (
+                <option key={m} value={m}>{m} 分钟</option>
+              ))}
+            </select>
+          </div>
+          <motion.button
+            onClick={onTrigger}
+            disabled={isChecking || status.running}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            className={cn(
+              "px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-all",
+              isChecking || status.running
+                ? "bg-blue-500/20 text-blue-400 cursor-wait"
+                : "bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-lg shadow-blue-500/25"
+            )}
+          >
+            <RefreshCw className={cn("w-4 h-4", (isChecking || status.running) && "animate-spin")} />
+            {status.running ? '扫描中...' : '立即扫描'}
+          </motion.button>
+        </div>
+        {status.activeKeywordCount === 0 && (
+          <p className="text-amber-400 text-sm mt-3 flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4" />
+            没有启用的监控词，请先在"监控词"中添加并开启
+          </p>
+        )}
+      </div>
+
+      {/* 运行状态 */}
+      <div className="p-5 rounded-2xl bg-white/[0.02] border border-white/5">
+        <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+          <Activity className="w-5 h-5 text-cyan-400" />
+          运行状态
+        </h3>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+          <div>
+            <span className="text-slate-500 block mb-1">状态</span>
+            <span className={cn("font-medium", status.running ? 'text-blue-400' : status.enabled ? 'text-emerald-400' : 'text-slate-500')}>
+              {status.running ? '运行中' : status.enabled ? '等待中' : '已停用'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block mb-1">最近运行</span>
+            <span className="text-white">{status.lastRunAt ? relativeTime(status.lastRunAt) : '—'}</span>
+          </div>
+          <div>
+            <span className="text-slate-500 block mb-1">下次运行</span>
+            <span className="text-white">{status.nextRunAt ? relativeTime(status.nextRunAt) : '—'}</span>
+          </div>
+          <div>
+            <span className="text-slate-500 block mb-1">上次结果</span>
+            <span className={statusColor}>
+              {status.lastRunStatus ? (statusLabel[status.lastRunStatus] || status.lastRunStatus) : '—'}
+            </span>
+          </div>
+        </div>
+        {status.lastRunError && (
+          <div className="mt-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            {status.lastRunError}
+          </div>
+        )}
+      </div>
+
+      {/* 上次摘要 */}
+      {status.lastRunSummary && (
+        <div className="p-5 rounded-2xl bg-white/[0.02] border border-white/5">
+          <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+            <TrendingUp className="w-5 h-5 text-emerald-400" />
+            上次扫描摘要
+          </h3>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 text-sm mb-4">
+            <div>
+              <span className="text-slate-500 block mb-1">关键词数</span>
+              <span className="text-white font-medium">{status.lastRunSummary.keywordCount}</span>
+            </div>
+            <div>
+              <span className="text-slate-500 block mb-1">新增</span>
+              <span className="text-emerald-400 font-medium">{status.lastRunSummary.newCount}</span>
+            </div>
+            <div>
+              <span className="text-slate-500 block mb-1">更新</span>
+              <span className="text-blue-400 font-medium">{status.lastRunSummary.updatedCount}</span>
+            </div>
+            <div>
+              <span className="text-slate-500 block mb-1">过滤</span>
+              <span className="text-slate-400 font-medium">{status.lastRunSummary.filteredCount}</span>
+            </div>
+            <div>
+              <span className="text-slate-500 block mb-1">耗时</span>
+              <span className="text-white font-medium">{(status.lastRunSummary.durationMs / 1000).toFixed(1)}s</span>
+            </div>
+          </div>
+          {/* 来源统计 */}
+          <div className="space-y-2">
+            {Object.entries(status.lastRunSummary.sourceStats).map(([source, stat]) => (
+              <div key={source} className="flex items-center justify-between text-xs px-3 py-2 rounded-lg bg-white/[0.02] border border-white/5">
+                <span className="text-slate-400 capitalize">{source}</span>
+                <div className="flex items-center gap-4">
+                  <span className="text-slate-500">{stat.resultCount} 条</span>
+                  <span className="text-emerald-400">+{stat.newCount}</span>
+                  <span className="text-slate-500">{(stat.durationMs / 1000).toFixed(1)}s</span>
+                  {stat.error && <span className="text-red-400" title={stat.error}>❌</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
@@ -74,18 +247,16 @@ function App() {
   const [unreadCount, setUnreadCount] = useState(0);
   
   const [newKeyword, setNewKeyword] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchSources, setSearchSources] = useState<string[]>(['twitter', 'bing', 'github']);
   const [isLoading, setIsLoading] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'keywords' | 'search'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'keywords' | 'scheduler'>('dashboard');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [dashboardFilters, setDashboardFilters] = useState<FilterState>({ ...defaultFilterState });
-  const [searchFilters, setSearchFilters] = useState<FilterState>({ ...defaultFilterState });
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [searchResults, setSearchResults] = useState<Hotspot[]>([]);
+  // V2: 调度器状态
+  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   // 展开/折叠状态
   const [expandedReasons, setExpandedReasons] = useState<Set<string>>(new Set());
   const [expandedContents, setExpandedContents] = useState<Set<string>>(new Set());
@@ -107,11 +278,12 @@ function App() {
         sortOrder: dashboardFilters.sortOrder || undefined,
       };
 
-      const [keywordsData, hotspotsData, statsData, notifData] = await Promise.all([
+      const [keywordsData, hotspotsData, statsData, notifData, schedData] = await Promise.all([
         keywordsApi.getAll(),
         hotspotsApi.getAll(filterParams),
         hotspotsApi.getStats(),
-        notificationsApi.getAll({ limit: 20 })
+        notificationsApi.getAll({ limit: 20 }),
+        schedulerApi.getStatus().catch(() => null)
       ]);
       setKeywords(keywordsData);
       setHotspots(hotspotsData.data);
@@ -119,6 +291,7 @@ function App() {
       setStats(statsData);
       setNotifications(notifData.data);
       setUnreadCount(notifData.unreadCount);
+      if (schedData) setSchedulerStatus(schedData);
 
       // 订阅关键词
       const activeKeywords = keywordsData.filter(k => k.isActive).map(k => k.text);
@@ -144,8 +317,13 @@ function App() {
   // WebSocket 事件
   useEffect(() => {
     const unsubHotspot = onNewHotspot((hotspot) => {
-      setHotspots(prev => [hotspot as Hotspot, ...prev.slice(0, 19)]);
-      showToast('发现新热点: ' + hotspot.title.slice(0, 30), 'success');
+      // 仅当关联关键词仍处于启用状态时才更新本地列表
+      const kwText = hotspot.keyword?.text;
+      const isActive = !kwText || keywords.some(k => k.text === kwText && k.isActive);
+      if (isActive) {
+        setHotspots(prev => [hotspot as Hotspot, ...prev.slice(0, 19)]);
+        showToast('发现新热点: ' + hotspot.title.slice(0, 30), 'success');
+      }
       loadData();
     });
 
@@ -153,11 +331,16 @@ function App() {
       setUnreadCount(prev => prev + 1);
     });
 
+    const unsubScan = onScanComplete(() => {
+      loadData();
+    });
+
     return () => {
       unsubHotspot();
       unsubNotif();
+      unsubScan();
     };
-  }, [loadData]);
+  }, [loadData, keywords]);
 
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type });
@@ -196,37 +379,22 @@ function App() {
     try {
       const updated = await keywordsApi.toggle(id);
       setKeywords(prev => prev.map(k => k.id === id ? updated : k));
+      // V2: 切换关键词后刷新雷达列表和统计（启用关键词口径变化）
+      loadData();
     } catch {
       showToast('操作失败', 'error');
     }
   };
 
-  // 手动搜索
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-
-    setIsLoading(true);
-    try {
-      const result = await hotspotsApi.search(searchQuery, searchSources);
-      setSearchResults(result.results);
-      showToast(result.errors?.length ? `${result.errors.join('；')}，找到 ${result.results.length} 条结果` : `找到 ${result.results.length} 条结果`, result.errors?.length && result.results.length === 0 ? 'error' : 'success');
-    } catch {
-      showToast('搜索失败', 'error');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // 手动触发检查
+  // 手动触发增量扫描
   const handleManualCheck = async () => {
     setIsChecking(true);
     try {
-      await triggerHotspotCheck();
-      showToast('热点检查已触发', 'success');
+      await schedulerApi.trigger();
+      showToast('增量扫描已触发', 'success');
       setTimeout(loadData, 5000);
-    } catch {
-      showToast('触发失败', 'error');
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : '触发失败', 'error');
     } finally {
       setIsChecking(false);
     }
@@ -271,45 +439,6 @@ function App() {
     setAllReasonsExpanded(!allReasonsExpanded);
   };
 
-  // Client-side filtering/sorting for search results
-  const filteredSearchResults = useMemo(() => {
-    let results = [...searchResults];
-
-    // Apply filters
-    if (searchFilters.source) {
-      results = results.filter(h => h.source === searchFilters.source);
-    }
-    if (searchFilters.importance) {
-      results = results.filter(h => h.importance === searchFilters.importance);
-    }
-    if (searchFilters.isReal === 'true') {
-      results = results.filter(h => h.isReal);
-    } else if (searchFilters.isReal === 'false') {
-      results = results.filter(h => !h.isReal);
-    }
-    if (searchFilters.keywordId) {
-      results = results.filter(h => h.keyword?.id === searchFilters.keywordId);
-    }
-    if (searchFilters.timeRange) {
-      const now = new Date();
-      let dateFrom: Date | null = null;
-      switch (searchFilters.timeRange) {
-        case '1h': dateFrom = new Date(now.getTime() - 60 * 60 * 1000); break;
-        case 'today': dateFrom = new Date(now); dateFrom.setHours(0, 0, 0, 0); break;
-        case '7d': dateFrom = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break;
-        case '30d': dateFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); break;
-      }
-      if (dateFrom) {
-        results = results.filter(h => new Date(h.createdAt) >= dateFrom!);
-      }
-    }
-
-    // Apply sorting using shared utility
-    results = sortHotspots(results, searchFilters.sortBy || 'createdAt', (searchFilters.sortOrder || 'desc') as 'asc' | 'desc');
-
-    return results;
-  }, [searchResults, searchFilters]);
-
   const getImportanceIcon = (importance: string) => {
     switch (importance) {
       case 'urgent': return <AlertTriangle className="w-4 h-4" />;
@@ -325,6 +454,8 @@ function App() {
       case 'bilibili': return <Eye className="w-4 h-4" />;
       case 'weibo': return <Activity className="w-4 h-4" />;
       case 'sogou': return <Search className="w-4 h-4" />;
+      case 'google': return <Globe className="w-4 h-4" />;
+      case 'bing': return <Globe className="w-4 h-4" />;
       case 'hackernews': return <Zap className="w-4 h-4" />;
       case 'github': return <Github className="w-4 h-4" />;
       default: return <Globe className="w-4 h-4" />;
@@ -472,7 +603,7 @@ function App() {
           {([
             { key: 'dashboard', label: '热点雷达', icon: Activity },
             { key: 'keywords', label: '监控词', icon: Target },
-            { key: 'search', label: '搜索', icon: Search },
+            { key: 'scheduler', label: '定时任务', icon: Settings },
           ] as const).map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -568,7 +699,11 @@ function App() {
                   <Flame className="w-5 h-5 text-orange-500" />
                   实时热点流
                 </h2>
-                <span className="text-xs text-slate-600">每 30 分钟自动更新</span>
+                <span className="text-xs text-slate-600">
+                  {schedulerStatus?.enabled
+                    ? `每 ${schedulerStatus.intervalMinutes} 分钟自动扫描`
+                    : '定时扫描已停用'}
+                </span>
               </div>
 
               {/* Filter & Sort Bar */}
@@ -587,10 +722,10 @@ function App() {
               ) : hotspots.length === 0 ? (
                 <div className="text-center py-16 rounded-2xl border border-dashed border-white/10">
                   <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 flex items-center justify-center">
-                    <Search className="w-8 h-8 text-slate-600" />
+                    <Activity className="w-8 h-8 text-slate-600" />
                   </div>
                   <p className="text-slate-500">尚未发现热点</p>
-                  <p className="text-sm text-slate-600 mt-1">添加监控关键词开始追踪</p>
+                  <p className="text-sm text-slate-600 mt-1">添加并开启监控词后，定时任务会自动扫描</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -989,168 +1124,37 @@ function App() {
                   <Target className="w-8 h-8 text-slate-600" />
                 </div>
                 <p className="text-slate-500">还没有监控关键词</p>
-                <p className="text-sm text-slate-600 mt-1">添加你想追踪的技术热点词</p>
+                <p className="text-sm text-slate-600 mt-1">添加并开启监控词，定时任务会自动扫描各来源</p>
               </div>
             )}
           </div>
         )}
 
-        {/* Search Tab */}
-        {activeTab === 'search' && (
-          <div className="space-y-6">
-            {/* Search Form */}
-            <form onSubmit={handleSearch} className="p-5 rounded-2xl bg-white/[0.02] border border-white/5">
-              <div className="flex gap-3">
-                <div className="flex-1 relative">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-600" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="搜索热点内容（支持 repo:owner/repo 监控 Release）..."
-                    className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all"
-                  />
-                </div>
-                <motion.button 
-                  type="submit" 
-                  disabled={isLoading}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  className="px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-medium flex items-center gap-2 shadow-lg shadow-blue-500/25 disabled:opacity-50"
-                >
-                  {isLoading ? (
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  ) : (
-                    <Search className="w-4 h-4" />
-                  )}
-                  搜索
-                </motion.button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 mt-3 text-xs text-slate-500">
-                <span>搜索来源：</span>
-                {['twitter', 'bing', 'github'].map(source => (
-                  <button
-                    type="button"
-                    key={source}
-                    onClick={() => setSearchSources(prev => prev.includes(source) ? prev.filter(item => item !== source) : [...prev, source])}
-                    className={cn('px-2.5 py-1 rounded-lg border transition-colors', searchSources.includes(source) ? 'text-blue-400 border-blue-500/30 bg-blue-500/10' : 'border-white/10 hover:border-white/20')}
-                  >
-                    {source === 'github' ? 'GitHub' : source === 'twitter' ? 'Twitter' : 'Bing'}
-                  </button>
-                ))}
-              </div>
-            </form>
-
-            {/* Search Filter & Sort Bar */}
-            <FilterSortBar
-              filters={searchFilters}
-              onChange={setSearchFilters}
-              keywords={keywords}
-            />
-
-            {/* Search Results */}
-            <div className="space-y-3">
-              {filteredSearchResults.length === 0 && searchResults.length > 0 && (
-                <div className="text-center py-12 rounded-2xl border border-dashed border-white/10">
-                  <p className="text-slate-500">当前筛选条件下无结果</p>
-                  <p className="text-sm text-slate-600 mt-1">尝试调整筛选条件</p>
-                </div>
-              )}
-              {filteredSearchResults.map((hotspot, i) => {
-                const heatScore = calcHeatScore(hotspot);
-                const heat = getHeatLevel(heatScore);
-                return (
-                <motion.div 
-                  key={hotspot.id} 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.03 }}
-                  className="group p-5 rounded-2xl bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 transition-all"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-3">
-                        <span className={cn(
-                          "px-2.5 py-1 rounded-lg text-[10px] font-semibold uppercase flex items-center",
-                          hotspot.importance === 'urgent' && "bg-red-500/15 text-red-400 border border-red-500/20",
-                          hotspot.importance === 'high' && "bg-orange-500/15 text-orange-400 border border-orange-500/20",
-                          hotspot.importance === 'medium' && "bg-amber-500/15 text-amber-400 border border-amber-500/20",
-                          hotspot.importance === 'low' && "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
-                        )}>
-                          {getImportanceIcon(hotspot.importance)}
-                          <span className="ml-1">{hotspot.importance}</span>
-                        </span>
-                        <span className="flex items-center gap-1 text-xs text-slate-600">
-                          {getSourceIcon(hotspot.source)}
-                          {getSourceLabel(hotspot.source)}
-                        </span>
-                        {!hotspot.isReal && (
-                          <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-red-500/10 text-red-400 border border-red-500/20">
-                            <ShieldAlert className="w-3 h-3" />
-                            可疑
-                          </span>
-                        )}
-                        <span className={cn("flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-white/5 border border-white/10 font-medium", heat.color)}>
-                          <ThermometerSun className="w-3 h-3" />
-                          {heat.label} {heatScore}
-                        </span>
-                      </div>
-                      <h3 className="font-medium text-white mb-2 group-hover:text-blue-400 transition-colors">{hotspot.title}</h3>
-                      <GitHubDetails hotspot={hotspot} />
-                      {hotspot.summary && (
-                        <div className="mb-2">
-                          <span className="text-[10px] text-blue-400/60 font-medium mr-1.5">AI 摘要</span>
-                          <span className="text-sm text-slate-500">{hotspot.summary}</span>
-                        </div>
-                      )}
-                      {hotspot.authorName && (
-                        <div className="flex items-center gap-2 mb-2">
-                          <User className="w-4 h-4 text-slate-600" />
-                          <span className="text-xs text-slate-400">{hotspot.authorName}</span>
-                          {hotspot.authorVerified && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">✓ 认证</span>
-                          )}
-                        </div>
-                      )}
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                        <span className="flex items-center gap-1">
-                          <Target className="w-3.5 h-3.5" />
-                          相关性 {hotspot.relevance}%
-                        </span>
-                        {hotspot.likeCount != null && hotspot.likeCount > 0 && (
-                          <span className="flex items-center gap-1" title="点赞">
-                            <Zap className="w-3.5 h-3.5" />
-                            {hotspot.likeCount.toLocaleString()}
-                          </span>
-                        )}
-                        {hotspot.viewCount != null && hotspot.viewCount > 0 && (
-                          <span className="flex items-center gap-1" title="浏览量">
-                            <Eye className="w-3.5 h-3.5" />
-                            {hotspot.viewCount.toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                      {hotspot.publishedAt && (
-                        <div className="flex items-center gap-1 text-[11px] text-slate-600 mt-1" title={formatDateTime(hotspot.publishedAt)}>
-                          <Clock className="w-3 h-3" />
-                          {hotspot.source === 'github' && hotspot.eventType === 'repository' ? '最近推送' : '发布'} {relativeTime(hotspot.publishedAt)}
-                        </div>
-                      )}
-                    </div>
-                    <a
-                      href={hotspot.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0 px-4 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 text-sm font-medium transition-all"
-                    >
-                      查看
-                    </a>
-                  </div>
-                </motion.div>
-                );
-              })}
-            </div>
-          </div>
+        {/* Scheduler Tab */}
+        {activeTab === 'scheduler' && (
+          <SchedulerPanel
+            status={schedulerStatus}
+            onRefresh={async () => {
+              const s = await schedulerApi.getStatus().catch(() => null);
+              if (s) setSchedulerStatus(s);
+            }}
+            onToggle={async (enabled) => {
+              try {
+                const s = await schedulerApi.updateConfig({ enabled });
+                setSchedulerStatus(s);
+                showToast(enabled ? '定时扫描已启用' : '定时扫描已停用', 'success');
+              } catch { showToast('操作失败', 'error'); }
+            }}
+            onIntervalChange={async (intervalMinutes) => {
+              try {
+                const s = await schedulerApi.updateConfig({ intervalMinutes });
+                setSchedulerStatus(s);
+                showToast(`扫描间隔已设为 ${intervalMinutes} 分钟`, 'success');
+              } catch { showToast('操作失败', 'error'); }
+            }}
+            onTrigger={handleManualCheck}
+            isChecking={isChecking}
+          />
         )}
       </main>
     </div>

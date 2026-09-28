@@ -1,51 +1,8 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { sortHotspots } from '../utils/sortHotspots.js';
-import type { AIAnalysis, SearchResult } from '../types.js';
 
 const router = Router();
-
-function toSearchHotspot(item: SearchResult, analysis: AIAnalysis | null) {
-  return {
-    id: `${item.source}:${item.sourceId || item.url}`,
-    title: item.title,
-    content: item.content,
-    url: item.url,
-    source: item.source,
-    sourceId: item.sourceId || null,
-    eventType: item.eventType || null,
-    repoFullName: item.repoFullName || null,
-    starCount: item.starCount ?? null,
-    forkCount: item.forkCount ?? null,
-    watcherCount: item.watcherCount ?? null,
-    language: item.language || null,
-    releaseTagName: item.releaseTagName || null,
-    releaseIsPrerelease: item.releaseIsPrerelease ?? null,
-    pushedAt: item.pushedAt?.toISOString() || null,
-    isReal: analysis?.isReal ?? true,
-    relevance: analysis?.relevance ?? 0,
-    relevanceReason: analysis?.relevanceReason || null,
-    keywordMentioned: analysis?.keywordMentioned ?? null,
-    importance: analysis?.importance || 'low',
-    summary: analysis?.summary || null,
-    viewCount: item.viewCount ?? null,
-    likeCount: item.likeCount ?? null,
-    retweetCount: item.retweetCount ?? null,
-    replyCount: item.replyCount ?? null,
-    commentCount: item.commentCount ?? null,
-    quoteCount: item.quoteCount ?? null,
-    danmakuCount: item.danmakuCount ?? null,
-    authorName: item.author?.name || null,
-    authorUsername: item.author?.username || null,
-    authorAvatar: item.author?.avatar || null,
-    authorFollowers: item.author?.followers ?? null,
-    authorVerified: item.author?.verified ?? null,
-    publishedAt: item.publishedAt?.toISOString() || null,
-    createdAt: new Date().toISOString(),
-    keyword: null,
-    analysis
-  };
-}
 
 // 获取所有热点
 router.get('/', async (req, res) => {
@@ -68,7 +25,10 @@ router.get('/', async (req, res) => {
     const limitNum = parseInt(limit as string);
     const skip = (pageNum - 1) * limitNum;
 
-    const where: any = {};
+    const where: any = {
+      // V2: 默认只展示启用关键词关联的热点
+      keyword: { isActive: true }
+    };
     if (source) where.source = source;
     if (importance) where.importance = importance;
     if (keywordId) where.keywordId = keywordId;
@@ -171,21 +131,25 @@ router.get('/stats', async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // V2: 统计口径统一为启用关键词
+    const activeFilter = { keyword: { isActive: true } };
+
     const [
       totalHotspots,
       todayHotspots,
       urgentHotspots,
       sourceStats
     ] = await Promise.all([
-      prisma.hotspot.count(),
+      prisma.hotspot.count({ where: activeFilter }),
       prisma.hotspot.count({
-        where: { createdAt: { gte: today } }
+        where: { ...activeFilter, createdAt: { gte: today } }
       }),
       prisma.hotspot.count({
-        where: { importance: 'urgent' }
+        where: { ...activeFilter, importance: 'urgent' }
       }),
       prisma.hotspot.groupBy({
         by: ['source'],
+        where: activeFilter,
         _count: { source: true }
       })
     ]);
@@ -226,78 +190,11 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// 手动搜索热点
-router.post('/search', async (req, res) => {
-  try {
-    const { query, sources = ['twitter', 'bing', 'github'] } = req.body;
-
-    if (!query) {
-      return res.status(400).json({ error: 'Query is required' });
-    }
-
-    // 导入搜索服务
-    const { searchTwitter } = await import('../services/twitter.js');
-    const { searchBing } = await import('../services/search.js');
-    const { collectGitHub, parseRepoReference } = await import('../services/github.js');
-    const { analyzeContent } = await import('../services/ai.js');
-
-    const repoSyntax = String(query).trim();
-    if (repoSyntax.startsWith('repo:') && !parseRepoReference(repoSyntax)) {
-      return res.status(400).json({ error: 'Invalid GitHub repository format. Use repo:owner/name.' });
-    }
-
-    const results: any[] = [];
-    const errors: string[] = [];
-
-    // Twitter 搜索
-    if (sources.includes('twitter')) {
-      try {
-        const tweets = await searchTwitter(query);
-        results.push(...tweets);
-      } catch (error) {
-        console.error('Twitter search failed:', error);
-        errors.push('Twitter 搜索失败');
-      }
-    }
-
-    // Bing 搜索
-    if (sources.includes('bing')) {
-      try {
-        const webResults = await searchBing(query);
-        results.push(...webResults);
-      } catch (error) {
-        console.error('Bing search failed:', error);
-        errors.push('Bing 搜索失败');
-      }
-    }
-
-    if (sources.includes('github')) {
-      try {
-        results.push(...await collectGitHub(query));
-      } catch (error) {
-        console.error('GitHub search failed:', error);
-        errors.push(error instanceof Error ? `GitHub 搜索失败：${error.message}` : 'GitHub 搜索失败');
-      }
-    }
-
-    // AI 分析前几个结果
-    const analyzedResults = await Promise.all(
-      results.slice(0, 10).map(async (item) => {
-        try {
-          const repo = parseRepoReference(query);
-          const analysis = await analyzeContent(item.title + ' ' + item.content, repo?.fullName || query);
-          return toSearchHotspot(item, analysis);
-        } catch {
-          return toSearchHotspot(item, null);
-        }
-      })
-    );
-
-    res.json({ results: analyzedResults, errors });
-  } catch (error) {
-    console.error('Error searching hotspots:', error);
-    res.status(500).json({ error: 'Failed to search hotspots' });
-  }
+// V2: 手动搜索接口已下线，返回 410 Gone
+router.post('/search', (_req, res) => {
+  res.status(410).json({
+    error: '手动搜索接口已在 V2 中移除。请使用监控词 + 定时扫描功能。'
+  });
 });
 
 // 删除热点

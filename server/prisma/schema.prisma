@@ -18,6 +18,7 @@ model Keyword {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   hotspots  Hotspot[]
+  scanStates KeywordScanState[]
 }
 
 model Hotspot {
@@ -60,6 +61,8 @@ model Hotspot {
   keyword         Keyword?  @relation(fields: [keywordId], references: [id], onDelete: SetNull)
 
   @@unique([url, source])
+  @@index([source, sourceId])
+  @@index([keywordId])
 }
 
 model Notification {
@@ -76,4 +79,57 @@ model Setting {
   id    String @id @default(uuid())
   key   String @unique
   value String
+}
+
+// 调度器单例配置与最近一次运行状态（id 固定为 default）
+model SchedulerState {
+  id              String    @id @default("default")
+  enabled         Boolean   @default(true)
+  intervalMinutes Int       @default(30)
+  lastRunAt       DateTime?
+  nextRunAt       DateTime?
+  lastRunStatus   String?   // success, partial, failed, empty
+  lastRunError    String?
+  lastRunSummary  String?   // JSON: 新增/更新/过滤数量和各来源统计
+  runToken        String?   // 运行令牌，非空表示有任务在执行
+  runStartedAt    DateTime?
+  updatedAt       DateTime  @updatedAt
+}
+
+// 关键词 × 来源的增量扫描水位
+model KeywordScanState {
+  id               String    @id @default(uuid())
+  keywordId        String
+  source           String
+  lastStartedAt    DateTime?
+  lastSuccessAt    DateTime?
+  watermarkAt      DateTime? // 已成功处理内容的最新发布时间
+  lastResultCount  Int       @default(0)
+  lastNewCount     Int       @default(0)
+  lastUpdatedCount Int       @default(0)
+  lastDurationMs   Int?
+  lastStatus       String?   // success, empty, failed
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  keyword          Keyword   @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, source])
+}
+
+// 扫描任务运行记录
+model ScanRun {
+  id            String    @id @default(uuid())
+  trigger       String    // schedule, manual
+  status        String    // running, success, partial, failed, empty
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  keywordCount  Int       @default(0)
+  newCount      Int       @default(0)
+  updatedCount  Int       @default(0)
+  filteredCount Int       @default(0)
+  sourceStats   String?   // JSON
+  error         String?
+
+  @@index([startedAt])
 }

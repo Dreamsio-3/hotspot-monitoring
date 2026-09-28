@@ -1,5 +1,5 @@
 {
-  "name": "yupi-hot-monitor-server",
+  "name": "hotpulse-server",
   "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",

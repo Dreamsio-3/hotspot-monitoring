@@ -66,6 +66,42 @@ export interface Stats {
   bySource: Record<string, number>;
 }
 
+// V2: 调度器类型
+export interface SchedulerStatus {
+  enabled: boolean;
+  intervalMinutes: number;
+  running: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  lastRunStatus: string | null;
+  lastRunError: string | null;
+  lastRunSummary: ScanRunSummary | null;
+  activeKeywordCount: number;
+}
+
+export interface ScanRunSummary {
+  keywordCount: number;
+  newCount: number;
+  updatedCount: number;
+  filteredCount: number;
+  sourceStats: Record<string, { resultCount: number; newCount: number; durationMs: number; error?: string }>;
+  durationMs: number;
+}
+
+export interface ScanRun {
+  id: string;
+  trigger: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  keywordCount: number;
+  newCount: number;
+  updatedCount: number;
+  filteredCount: number;
+  sourceStats: string | null;
+  error: string | null;
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${endpoint}`, {
     headers: {
@@ -139,16 +175,10 @@ export const hotspotsApi = {
   },
   
   getStats: () => request<Stats>('/hotspots/stats'),
-  
+
   getById: (id: string) => request<Hotspot>(`/hotspots/${id}`),
-  
-  search: (query: string, sources?: string[]) => 
-    request<{ results: Hotspot[]; errors?: string[] }>('/hotspots/search', {
-      method: 'POST',
-      body: JSON.stringify({ query, sources })
-    }),
-  
-  delete: (id: string) => 
+
+  delete: (id: string) =>
     request<void>(`/hotspots/${id}`, { method: 'DELETE' })
 };
 
@@ -182,14 +212,31 @@ export const notificationsApi = {
 // Settings API
 export const settingsApi = {
   getAll: () => request<Record<string, string>>('/settings'),
-  
-  update: (settings: Record<string, string>) => 
+
+  update: (settings: Record<string, string>) =>
     request<void>('/settings', {
       method: 'PUT',
       body: JSON.stringify(settings)
     })
 };
 
-// Manual trigger
-export const triggerHotspotCheck = () => 
+// V2: Scheduler API
+export const schedulerApi = {
+  getStatus: () => request<SchedulerStatus>('/scheduler/status'),
+
+  updateConfig: (config: { enabled?: boolean; intervalMinutes?: number }) =>
+    request<SchedulerStatus>('/scheduler/config', {
+      method: 'PUT',
+      body: JSON.stringify(config)
+    }),
+
+  trigger: () =>
+    request<{ message: string }>('/scheduler/trigger', { method: 'POST' }),
+
+  getRuns: (limit = 10) =>
+    request<ScanRun[]>(`/scheduler/runs?limit=${limit}`)
+};
+
+// Manual trigger (兼容旧调用，内部走调度器)
+export const triggerHotspotCheck = () =>
   request<{ message: string }>('/check-hotspots', { method: 'POST' });

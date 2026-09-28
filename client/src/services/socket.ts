@@ -66,6 +66,24 @@ export function onNotification(callback: (notification: NotificationEvent) => vo
   return () => s.off('notification', callback);
 }
 
+export interface ScanCompleteEvent {
+  runId: string;
+  status: string;
+  summary?: {
+    newCount: number;
+    updatedCount: number;
+    filteredCount: number;
+    durationMs: number;
+  };
+  error?: string;
+}
+
+export function onScanComplete(callback: (event: ScanCompleteEvent) => void): () => void {
+  const s = getSocket();
+  s.on('scan:complete', callback);
+  return () => s.off('scan:complete', callback);
+}
+
 export function disconnectSocket(): void {
   if (socket) {
     socket.disconnect();

@@ -373,12 +373,15 @@ export async function searchWeibo(query: string): Promise<SearchResult[]> {
       if (isMatch) {
         const topicName = item.note || item.word;
         const url = `https://s.weibo.com/weibo?q=${encodeURIComponent('#' + topicName + '#')}`;
+        // 稳定的 sourceId：用话题名生成，确保同一话题跨扫描周期不重复
+        const topicId = `weibo-topic:${topicName}`;
 
         results.push({
           title: `🔥 微博热搜: ${topicName}`,
           content: `微博热搜话题「${topicName}」，热度 ${item.num?.toLocaleString() || '未知'}`,
           url,
           source: 'weibo' as const,
+          sourceId: topicId,
           viewCount: item.num || 0
         });
       }
