@@ -238,16 +238,23 @@ export async function searchHackerNews(query: string): Promise<SearchResult[]> {
   }
 }
 
-// 去重工具函数
+// 去重工具函数：来源 ID 优先，URL 规范化兜底
 export function deduplicateResults(allResults: SearchResult[]): SearchResult[] {
-  const uniqueUrls = new Set<string>();
+  const seen = new Set<string>();
   return allResults.filter(item => {
-    // 标准化 URL 用于去重
-    const normalizedUrl = item.url.replace(/\/$/, '').replace(/^https?:\/\/www\./, 'https://');
-    if (uniqueUrls.has(normalizedUrl)) {
-      return false;
+    // 优先用 source:sourceId 作为稳定去重键
+    if (item.sourceId) {
+      const sourceKey = `${item.source}:${item.sourceId}`;
+      if (seen.has(sourceKey)) return false;
+      seen.add(sourceKey);
     }
-    uniqueUrls.add(normalizedUrl);
+    // URL 规范化兜底
+    const normalizedUrl = item.url
+      .replace(/\/$/, '')
+      .replace(/^https?:\/\/www\./, 'https://')
+      .replace(/#.*$/, '');
+    if (seen.has(normalizedUrl)) return false;
+    seen.add(normalizedUrl);
     return true;
   });
 }

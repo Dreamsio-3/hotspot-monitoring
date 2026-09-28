@@ -1,531 +1,134 @@
-# 🔌 API 集成技术文档
+# API 集成技术文档
 
-## 1. OpenRouter API 集成
+## 来源采集
 
-### 1.1 SDK 安装
+### 来源一览
 
-```bash
-npm install @openrouter/sdk
-```
+| 来源 | 函数 | 文件 | 频率限制 | 需要 Key |
+|------|------|------|----------|----------|
+| Twitter | `searchTwitter` | `services/twitter.ts` | API 限额 | ✅ `TWITTER_API_KEY` |
+| Bing | `searchBing` | `services/search.ts` | 5s / 请求 | ❌ |
+| Google | `searchGoogle` | `services/search.ts` | 10s / 请求 | ❌ |
+| Hacker News | `searchHackerNews` | `services/search.ts` | 1s / 请求 | ❌ |
+| 搜狗 | `searchSogou` | `services/chinaSearch.ts` | 3s / 请求 | ❌ |
+| Bilibili | `searchBilibili` | `services/chinaSearch.ts` | 2s / 请求 | ❌ |
+| 微博 | `searchWeibo` | `services/chinaSearch.ts` | 3s / 请求 | ❌ |
+| GitHub | `collectGitHub` | `services/github.ts` | API 限额 | 可选 `GITHUB_TOKEN` |
 
-### 1.2 基本配置
+所有来源统一返回 `SearchResult[]` 类型，定义在 `types.ts`。
 
-```typescript
-import { OpenRouter } from "@openrouter/sdk";
+### 字段映射
 
-const openRouter = new OpenRouter({
-  apiKey: process.env.OPENROUTER_API_KEY ?? "",
-});
-```
+每个来源的结果映射到 `SearchResult` 的核心字段：
 
-### 1.3 Chat Completion 调用
+- `title` — 标题
+- `content` — 正文 / 描述
+- `url` — 规范化链接
+- `source` — 来源标识（如 `twitter`、`bing`）
+- `sourceId` — 来源侧唯一 ID（用于稳定去重）
+- `publishedAt` — 发布时间（部分来源无此字段）
+- 互动指标：`viewCount`、`likeCount`、`retweetCount`、`commentCount` 等
 
-```typescript
-// 非流式调用
-async function analyzeHotspot(content: string) {
-  const result = await openRouter.chat.send({
-    model: "openai/gpt-4",
-    messages: [
-      {
-        role: "system",
-        content: `你是一个热点分析专家，请分析以下内容：
-1. 判断是否为真实的热点新闻（排除标题党、假新闻）
-2. 评估该热点与 AI 编程领域的相关性（0-100分）
-3. 评估热点的重要程度（low/medium/high/urgent）
-4. 生成简短摘要（50字以内）
+### 错误语义
 
-输出 JSON 格式：
-{
-  "isReal": true/false,
-  "relevance": 0-100,
-  "importance": "low/medium/high/urgent",
-  "summary": "..."
-}`
-      },
-      {
-        role: "user",
-        content: content
-      }
-    ],
-    stream: false,
-    temperature: 0.3,
-    maxTokens: 500
-  });
+- 来源函数返回空数组 `[]` 表示无结果或请求失败
+- 每个来源内置 `RateLimiter`，超时默认 15s
+- 页面抓取来源（Bing/Google/搜狗）可能遇到验证码、结构变化或地区差异
+- 失败时降级为空结果，错误信息记录到 `KeywordScanState.lastError`
 
-  return JSON.parse(result.choices[0].message.content);
-}
-```
+### 增量策略
 
-### 1.4 响应格式
+- 有 `publishedAt` 的来源：使用 `watermarkAt - 5min` 作为过滤起点，避免漏采
+- 无 `publishedAt` 的搜索引擎结果：依赖 URL 规范化 + `sourceId` + 数据库唯一约束去重
+- 已存在的热点只更新指标（viewCount、starCount 等），不重复 AI 分析和通知
+- 扫描失败不推进 `watermarkAt`，下次重试
+
+## 调度器 API
+
+### GET /api/scheduler/status
+
+返回调度器当前状态：
 
 ```json
 {
-  "id": "chatcmpl-xxxxxxxxxxxxxxxxx",
-  "object": "chat.completion",
-  "created": 1677652288,
-  "model": "openai/gpt-4",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "{\"isReal\": true, \"relevance\": 85, \"importance\": \"high\", \"summary\": \"...\"}"
-      },
-      "finish_reason": "stop"
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 10,
-    "completion_tokens": 15,
-    "total_tokens": 25
-  }
+  "enabled": true,
+  "intervalMinutes": 30,
+  "running": false,
+  "lastRunAt": "2026-09-27T10:00:00.000Z",
+  "nextRunAt": "2026-09-27T10:30:00.000Z",
+  "lastRunStatus": "success",
+  "lastRunError": null,
+  "lastRunSummary": {
+    "keywordCount": 3,
+    "newCount": 5,
+    "updatedCount": 12,
+    "filteredCount": 8,
+    "sourceStats": { ... },
+    "durationMs": 45000
+  },
+  "activeKeywordCount": 3
 }
 ```
 
----
+### PUT /api/scheduler/config
 
-## GitHub REST API 集成
-
-服务端使用 `GET /search/repositories` 搜索近期更新的公开仓库，使用 `GET /repos/{owner}/{repo}` 获取仓库指标，并使用 `GET /repos/{owner}/{repo}/releases` 获取 Release。监控词写成 `repo:owner/repo` 时只采集 Release，草稿会被过滤，预发布版本保留并通过 `releaseIsPrerelease` 标记。
-
-GitHub 结果统一映射为 `source: "github"`，`eventType` 为 `repository` 或 `release`。`starCount`、`forkCount`、`watcherCount` 分别对应 Star、Fork 和 `subscribers_count`；不会把 Star 写入点赞数，也不会使用 `watchers_count` 冒充订阅人数。仓库 `publishedAt`/`pushedAt` 表示最近推送时间，Release 表示发布时间。
-
-请求会发送 `Accept`、API 版本和 User-Agent，服务端可选使用 `GITHUB_TOKEN`。响应中的 ETag 会用于条件请求，限流时最多按 GitHub 返回的等待信息重试一次。
-
-手动搜索：
+更新调度器配置：
 
 ```json
-POST /api/hotspots/search
-{ "query": "AI agent", "sources": ["github"] }
+{ "enabled": true, "intervalMinutes": 15 }
 ```
 
-`sources` 省略时默认包含 `twitter`、`bing`、`github`。
-
-GitHub 热度使用独立的基础分：`20×log10(Star+1) + 15×log10(Fork+1) + 5×log10(订阅+1)`，与社交平台点赞、转发字段分开保存；卡片和“热度综合”排序使用同一公式。
-
----
-
-## 2. Twitter API (twitterapi.io) 集成
-
-### 2.1 认证
-
-```typescript
-const TWITTER_API_BASE = 'https://api.twitterapi.io';
-const TWITTER_API_KEY = process.env.TWITTER_API_KEY;
-
-const headers = {
-  'X-API-Key': TWITTER_API_KEY,
-  'Content-Type': 'application/json'
-};
-```
-
-### 2.2 高级搜索 API
-
-**Endpoint:** `GET /twitter/tweet/advanced_search`
-
-**参数:**
-- `query` (string, required): 搜索查询，支持高级语法
-- `queryType` (enum, required): `Latest` 或 `Top`
-- `cursor` (string, optional): 分页游标
-
-**查询语法示例:**
-```
-"AI" OR "GPT" lang:en since:2024-01-01
-from:OpenAI OR from:Anthropic
-#AINews min_faves:100
-```
-
-**请求示例:**
-
-```typescript
-async function searchTwitter(query: string, cursor?: string) {
-  const params = new URLSearchParams({
-    query: query,
-    queryType: 'Latest'
-  });
-  
-  if (cursor) {
-    params.append('cursor', cursor);
-  }
-
-  const response = await fetch(
-    `${TWITTER_API_BASE}/twitter/tweet/advanced_search?${params}`,
-    { headers }
-  );
-
-  return response.json();
-}
-```
-
-**响应格式:**
-
-```json
-{
-  "tweets": [
-    {
-      "type": "tweet",
-      "id": "1234567890",
-      "url": "https://twitter.com/user/status/1234567890",
-      "text": "Breaking: OpenAI announces GPT-5...",
-      "source": "Twitter Web App",
-      "retweetCount": 1500,
-      "replyCount": 300,
-      "likeCount": 5000,
-      "quoteCount": 200,
-      "viewCount": 150000,
-      "createdAt": "2024-01-15T10:30:00Z",
-      "lang": "en",
-      "author": {
-        "userName": "techreporter",
-        "name": "Tech Reporter",
-        "isBlueVerified": true,
-        "followers": 50000,
-        "profilePicture": "https://..."
-      },
-      "entities": {
-        "hashtags": [{ "text": "AI" }],
-        "urls": [{ "expanded_url": "https://..." }]
-      }
-    }
-  ],
-  "has_next_page": true,
-  "next_cursor": "xxxx"
-}
-```
-
-### 2.3 获取热门趋势
-
-**Endpoint:** `GET /twitter/trends`
-
-```typescript
-async function getTrends(woeid: number = 1) { // 1 = Worldwide
-  const response = await fetch(
-    `${TWITTER_API_BASE}/twitter/trends?woeid=${woeid}`,
-    { headers }
-  );
-  return response.json();
-}
-```
-
----
-
-## 3. 网页搜索爬虫
-
-### 3.1 Bing 搜索爬虫
-
-```typescript
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-
-const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36...',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36...',
-];
-
-async function searchBing(query: string): Promise<SearchResult[]> {
-  const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-  
-  const response = await axios.get('https://www.bing.com/search', {
-    params: { q: query },
-    headers: { 'User-Agent': userAgent }
-  });
-
-  const $ = cheerio.load(response.data);
-  const results: SearchResult[] = [];
-
-  $('li.b_algo').each((_, element) => {
-    const title = $(element).find('h2 a').text();
-    const url = $(element).find('h2 a').attr('href');
-    const snippet = $(element).find('.b_caption p').text();
-    
-    if (title && url) {
-      results.push({ title, url, snippet, source: 'bing' });
-    }
-  });
-
-  return results;
-}
-```
-
-### 3.2 频率控制
-
-```typescript
-class RateLimiter {
-  private queue: (() => Promise<void>)[] = [];
-  private processing = false;
-  private lastRequestTime = 0;
-  private minInterval = 5000; // 5 秒间隔
-
-  async add<T>(fn: () => Promise<T>): Promise<T> {
-    return new Promise((resolve, reject) => {
-      this.queue.push(async () => {
-        try {
-          const result = await fn();
-          resolve(result);
-        } catch (error) {
-          reject(error);
-        }
-      });
-      this.process();
-    });
-  }
-
-  private async process() {
-    if (this.processing || this.queue.length === 0) return;
-    
-    this.processing = true;
-    
-    while (this.queue.length > 0) {
-      const elapsed = Date.now() - this.lastRequestTime;
-      if (elapsed < this.minInterval) {
-        await new Promise(r => setTimeout(r, this.minInterval - elapsed));
-      }
-      
-      const task = this.queue.shift();
-      if (task) {
-        this.lastRequestTime = Date.now();
-        await task();
-      }
-    }
-    
-    this.processing = false;
-  }
-}
-```
-
----
-
-## 4. Prisma + SQLite 配置
-
-### 4.1 Schema 定义
-
-```prisma
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
-}
-
-model Keyword {
-  id        String    @id @default(uuid())
-  text      String    @unique
-  category  String?
-  isActive  Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  hotspots  Hotspot[]
-}
-
-model Hotspot {
-  id          String   @id @default(uuid())
-  title       String
-  content     String
-  url         String
-  source      String   // twitter, bing, google
-  sourceId    String?  // 原始推文ID等
-  isReal      Boolean  @default(true)
-  relevance   Int      @default(0)
-  importance  String   @default("low")
-  summary     String?
-  viewCount   Int?
-  likeCount   Int?
-  retweetCount Int?
-  publishedAt DateTime?
-  createdAt   DateTime @default(now())
-  keywordId   String?
-  keyword     Keyword? @relation(fields: [keywordId], references: [id])
-  
-  @@unique([url, source])
-}
-
-model Notification {
-  id        String   @id @default(uuid())
-  type      String   // hotspot, alert
-  title     String
-  content   String
-  isRead    Boolean  @default(false)
-  hotspotId String?
-  createdAt DateTime @default(now())
-}
-
-model Setting {
-  id    String @id @default(uuid())
-  key   String @unique
-  value String
-}
-```
-
-### 4.2 迁移命令
-
-```bash
-# 初始化数据库
-npx prisma migrate dev --name init
-
-# 生成 Prisma Client
-npx prisma generate
-```
-
-### 4.3 环境变量
-
-```env
-DATABASE_URL="file:./dev.db"
-```
-
----
-
-## 5. Express + WebSocket 配置
-
-### 5.1 服务器配置
-
-```typescript
-import express from 'express';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
-import cors from 'cors';
-
-const app = express();
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
-    methods: ['GET', 'POST']
-  }
-});
-
-app.use(cors());
-app.use(express.json());
-
-// WebSocket 连接
-io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
-  
-  socket.on('subscribe', (keywords: string[]) => {
-    keywords.forEach(kw => socket.join(`keyword:${kw}`));
-  });
-  
-  socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
-  });
-});
-
-// 发送热点通知
-function notifyNewHotspot(hotspot: Hotspot) {
-  io.to(`keyword:${hotspot.keyword?.text}`).emit('hotspot:new', hotspot);
-  io.emit('notification', {
-    type: 'hotspot',
-    title: '发现新热点',
-    content: hotspot.title
-  });
-}
-
-export { app, httpServer, io, notifyNewHotspot };
-```
-
-### 5.2 路由结构
-
-```typescript
-// routes/keywords.ts
-import { Router } from 'express';
-import { prisma } from '../db';
-
-const router = Router();
-
-router.get('/', async (req, res) => {
-  const keywords = await prisma.keyword.findMany({
-    orderBy: { createdAt: 'desc' }
-  });
-  res.json(keywords);
-});
-
-router.post('/', async (req, res) => {
-  const { text, category } = req.body;
-  const keyword = await prisma.keyword.create({
-    data: { text, category }
-  });
-  res.status(201).json(keyword);
-});
-
-router.delete('/:id', async (req, res) => {
-  await prisma.keyword.delete({
-    where: { id: req.params.id }
-  });
-  res.status(204).send();
-});
-
-export default router;
-```
-
----
-
-## 6. 定时任务配置
-
-```typescript
-import cron from 'node-cron';
-
-// 每 30 分钟执行一次热点检查
-cron.schedule('*/30 * * * *', async () => {
-  console.log('Running hotspot check...');
-  await checkHotspots();
-});
-
-async function checkHotspots() {
-  const keywords = await prisma.keyword.findMany({
-    where: { isActive: true }
-  });
-
-  for (const keyword of keywords) {
-    // 1. 从 Twitter 搜索
-    const tweets = await searchTwitter(keyword.text);
-    
-    // 2. 从 Bing 搜索
-    const webResults = await searchBing(keyword.text);
-    
-    // 3. AI 分析
-    for (const item of [...tweets, ...webResults]) {
-      const analysis = await analyzeHotspot(item.content);
-      
-      if (analysis.isReal && analysis.relevance > 60) {
-        // 4. 保存并通知
-        const hotspot = await saveHotspot(item, analysis, keyword);
-        notifyNewHotspot(hotspot);
-      }
-    }
-  }
-}
-```
-
----
-
-## 7. 邮件通知配置
-
-```typescript
-import nodemailer from 'nodemailer';
-
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
-
-async function sendEmailNotification(hotspot: Hotspot) {
-  await transporter.sendMail({
-    from: process.env.SMTP_USER,
-    to: process.env.NOTIFY_EMAIL,
-    subject: `🔥 新热点: ${hotspot.title}`,
-    html: `
-      <h2>${hotspot.title}</h2>
-      <p>${hotspot.summary}</p>
-      <p><strong>重要程度:</strong> ${hotspot.importance}</p>
-      <p><strong>相关性:</strong> ${hotspot.relevance}%</p>
-      <p><a href="${hotspot.url}">查看原文</a></p>
-    `
-  });
-}
-```
+`intervalMinutes` 必须是 5、10、15、30、60 之一。
+
+### POST /api/scheduler/trigger
+
+手动触发一次增量扫描。如果已有任务在运行，返回 409。
+
+### GET /api/scheduler/runs?limit=10
+
+返回最近的扫描运行记录。
+
+## 热点 API
+
+### GET /api/hotspots
+
+默认只返回启用关键词（`keyword.isActive = true`）关联的热点。支持以下查询参数：
+
+- `page` / `limit` — 分页
+- `source` — 来源筛选
+- `importance` — 重要程度筛选
+- `keywordId` — 关键词筛选
+- `timeRange` — 时间范围（1h / today / 7d / 30d）
+- `sortBy` — 排序字段（hot / createdAt / publishedAt / relevance / importance）
+- `sortOrder` — 排序方向（asc / desc）
+
+### GET /api/hotspots/stats
+
+统计使用同一启用关键词过滤条件。
+
+### POST /api/hotspots/search — 已下线
+
+返回 410 Gone。V2 不再提供手动搜索功能。
+
+## AI 分析
+
+使用 OpenRouter 接入 AI 模型，对每条新内容进行：
+
+- 真实性判断（`isReal`）
+- 相关性评分（`relevance` 0-100）
+- 关键词是否直接提及（`keywordMentioned`）
+- 重要程度评估（`importance`）
+- 智能摘要（`summary`）
+
+过滤规则：
+- `isReal = false` 直接过滤
+- `relevance < 50` 过滤
+- 未直接提及关键词且 `relevance < 65` 过滤
+
+## GitHub 集成
+
+- 普通关键词搜索近期活跃仓库
+- `repo:owner/repo` 语法跟踪指定仓库 Release
+- 字段映射：`starCount`、`forkCount`、`watcherCount`（对应 `subscribers_count`）
+- 热度公式：`20×log10(Star+1) + 15×log10(Fork+1) + 5×log10(订阅+1)`
+- 可选 `GITHUB_TOKEN` 提高 API 限额

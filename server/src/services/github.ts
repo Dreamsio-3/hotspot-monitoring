@@ -63,7 +63,7 @@ function headers(etag?: string): Record<string, string> {
   const result: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'yupi-hot-monitor/1.0'
+    'User-Agent': 'hotpulse/2.0'
   };
   if (process.env.GITHUB_TOKEN) result.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   if (etag) result['If-None-Match'] = etag;
